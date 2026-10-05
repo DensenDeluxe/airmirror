@@ -20,6 +20,8 @@ An independent adapter verifies what was actually transmitted over the air. A tr
 
 Two adapters are sufficient for a minimum verified mode: one transmits both variants while the other observes, and their roles are exchanged in the next block. The preferred research setup uses three adapters: two maintain independent station contexts used for control and mutation while a third remains a dedicated observer. The two transmitters exchange variant assignments, and the observer role can later rotate across all three devices. Frames are tightly interleaved, not transmitted simultaneously.
 
+Four and five adapters do not change the core oracle, but they can strengthen attribution. Four radios permit two transmitters plus two independent observers and are likely the practical high-confidence laboratory setup. Five radios can provide a three-observer ensemble or reserve additional radios as passive sentinels on affiliated channels. These are scaling profiles, not MVP requirements.
+
 The first implementation is intentionally small:
 
 - one target and one channel;
@@ -83,7 +85,7 @@ Wifit3 owns the injection path from the frame bytes down to each supported USB d
 
 ### 2.2 Multiple adapters as one session
 
-`WlanArray` already manages several `WlanInterface` instances, assigns channels, merges their received traffic, and tracks signal information per card. AirMirror can reserve two members as independent station contexts and a third as the observer without introducing a second operating-system capture stack. A reduced two-adapter mode can execute both variants through one transmitter and exchange roles between blocks.
+`WlanArray` already manages several `WlanInterface` instances, assigns channels, merges their received traffic, and tracks signal information per card. AirMirror can reserve two members as independent station contexts and one or more additional members as observers without introducing a second operating-system capture stack. A reduced two-adapter mode can execute both variants through one transmitter and exchange roles between blocks.
 
 ### 2.3 Scoped device state
 
@@ -127,7 +129,7 @@ The three-adapter mode is not about microsecond synchronization. Its value is st
 
 ### 3.1 Hardware profiles
 
-AirMirror should name the two profiles explicitly in transcripts and reports.
+AirMirror should name the active hardware profile explicitly in transcripts and reports.
 
 #### Two-radio verified
 
@@ -148,13 +150,52 @@ This profile has the lowest hardware barrier and is sufficient to prove the obse
 
 This is the preferred profile for strong evidence because it controls transmitter bias without sacrificing an independent observer or repeatedly rearming one station context.
 
+#### Four-radio corroborated
+
+- two transmitters run the same balanced crossover as three-radio mode;
+- two observers independently capture every request and target response;
+- observers should preferably differ by chipset family, antenna position, or both;
+- one observer may be positioned to verify transmitter egress while the other better approximates reception near the target;
+- per-observer results remain separate instead of being collapsed into the global deduplicated stream.
+
+Four radios are likely the practical high-confidence sweet spot. The second observer reduces false invalidations caused by a single missed capture and can reveal stable RX filtering differences between chipsets.
+
+#### Five-radio ensemble
+
+The primary five-radio layout keeps two balanced transmitters and uses three observers. This permits corroboration across heterogeneous RX paths and makes a persistent single-observer blind spot visible without abandoning independent OTA verification.
+
+A later alternative is a cross-channel sentinel layout:
+
+- two transmitters and one primary observer remain on the target channel;
+- two passive sentinels watch known affiliated BSSIDs or links on other channels;
+- sentinels record cross-BSSID disappearance, capability changes, or link resets caused by a target-channel trial.
+
+The sentinel layout depends on a trustworthy topology model and sufficient supported radios and bands. It is therefore future work, especially for 6 GHz and MLO.
+
+#### Full role rotation
+
+For confirmation of an already interesting result, AirMirror can test every unordered transmitter pair while all remaining adapters observe. Four adapters produce six transmitter pairs and five produce ten. Each pair still swaps control and mutation assignments before moving to the next block.
+
+This full rotation helps separate the transformation effect from both TX- and RX-card effects, but it increases experiment duration and target-state drift. It is a confirmation mode, not the normal discovery path.
+
+The scheduler and transcript should therefore model role collections from the beginning:
+
+```text
+transmitters: [A, B]
+observers: [C, D, E]
+```
+
+rather than hard-coding exactly one control card, one mutation card, and one observer card.
+
 ### 3.2 Terminology
 
 - **Control:** the canonical exchange used as the local behavioral baseline.
 - **Mutation:** the same exchange after applying one justified metamorphic transformation.
 - **Metamorphic relation:** the reason control and mutation should have the same protocol meaning.
 - **Observer:** an adapter that captures the transmitted request and target response but does not participate in the exchange.
-- **Verified trial:** a trial in which the observer captured a request matching the expected normalized frame.
+- **Observer ensemble:** two or more observers whose per-card copies remain independently attributable.
+- **Verified trial:** a trial in which at least the required observer set captured a request matching the expected normalized frame.
+- **Corroborated trial:** a verified trial independently confirmed by two or more observers under the experiment's evidence policy.
 - **Response fingerprint:** the discrete, normalized protocol outcome used for comparison.
 - **Transmitter crossover:** swapping control and mutation assignments between the two transmitting adapters.
 - **Observer rotation:** moving the receive-only role between adapters in separate blocks to expose RX-specific blind spots.
@@ -168,20 +209,20 @@ The experimental design is more important than the number of supported mutations
 
 A single trial should follow a strict lifecycle:
 
-1. Select and lease the transmitter set and observer on the target channel.
+1. Select and lease the transmitter set and observer set on the required channels.
 2. Establish a known starting condition.
 3. Assign a fresh or deliberately reused locally administered station MAC according to the experiment definition.
 4. Build the control or mutation exchange from the same semantic input.
 5. Record the exact intended bytes and relevant transmitter configuration.
 6. Transmit the exchange.
-7. Capture the request independently on the observer.
+7. Capture the request independently on every assigned observer.
 8. Reject the trial if OTA verification fails.
 9. Capture the target response within a bounded window.
 10. Normalize the response into discrete comparison fields.
 11. Clean up or isolate the state before the next trial.
 12. Store the complete trial transcript.
 
-Each pair is repeated with randomized control/mutation order. In two-radio mode, transmitter and observer exchange roles for the next block. In three-radio mode, control and mutation assignments are swapped between the two transmitters while the independent observer remains fixed for the block. A stronger campaign can then rotate the observer and repeat the balanced crossover.
+Each pair is repeated with randomized control/mutation order. In two-radio mode, transmitter and observer exchange roles for the next block. In three-radio mode, control and mutation assignments are swapped between the two transmitters while the independent observer remains fixed for the block. Four- and five-radio modes keep every observer copy separate while applying the same transmitter crossover. A stronger campaign can then rotate roles and repeat the balanced crossover.
 
 ### 4.2 Why assignments and roles must be balanced
 
@@ -214,18 +255,19 @@ The first implementation should use a conservative reproducibility gate instead 
 - require a minimum number of valid control and mutation trials;
 - require the dominant response fingerprint of each variant to be stable;
 - require the difference to recur after the crossover defined by the active hardware profile;
+- retain the complete per-observer visibility matrix instead of reducing it to a single Boolean;
 - report counts and raw outcomes, not only a binary vulnerability label;
 - classify unstable results as inconclusive.
 
 Exact thresholds should be versioned with the experiment definition and validated on known-good and deliberately faulty test targets. They should not be hidden UI constants.
 
-## 5. The observer
+## 5. The observer layer
 
-The observer is the primary distinction between AirMirror and a conventional send-and-wait campaign.
+Independent observation is the primary distinction between AirMirror and a conventional send-and-wait campaign. The minimum profile has one observer; larger profiles retain a separate observation from every assigned card.
 
 ### 5.1 What the observer proves
 
-The observer should verify at least:
+Each observer should verify at least:
 
 - transmitter/source address;
 - receiver and BSSID addresses;
@@ -235,36 +277,50 @@ The observer should verify at least:
 - that the frame was observed on the expected channel;
 - that the target response corresponds to the current trial identity.
 
-It does not prove that the target successfully decoded the frame. It proves that the planned test reached the air in an independently observable form. The distinction must remain explicit in reports.
+An observer does not prove that the target successfully decoded the frame. It proves that the planned test reached the air in an independently observable form. The distinction must remain explicit in reports.
 
-### 5.2 Required WlanArray hook
+### 5.2 Multi-observer corroboration
+
+More observers improve evidence only when their copies remain attributable and their failure modes are not treated as automatically independent. Three co-located adapters on one USB controller do not justify a naive majority vote.
+
+AirMirror should expose evidence labels rather than hide the underlying observations:
+
+- **verified:** the minimum observer policy confirmed the intended request;
+- **corroborated:** at least two observers independently confirmed it;
+- **heterogeneous-corroborated:** observers from at least two chipset families confirmed it;
+- **observer-conflict:** observers produced incompatible valid observations or stable response visibility differences.
+
+`observer-conflict` is not resolved by majority vote. It is retained as evidence of a possible RX-path, placement, retransmission-matching, or capture-normalization problem. A conflict may also motivate a separate receiver-differential experiment, but it must not be silently converted into a target finding.
+
+### 5.3 Required WlanArray hook
 
 Wifit3 currently suppresses frames transmitted by one of its own registered MAC addresses before they enter normal sink state. That is correct for scanning and attack campaigns: a second card hearing our own injected frame must not create a fake client or access point.
 
-AirMirror needs a narrowly scoped observation path before this suppression. The proposed hook should:
+AirMirror needs a narrowly scoped observation path before this suppression and before cross-card deduplication removes per-observer identity. The proposed hook should:
 
 - be campaign-scoped and removable;
-- identify which physical member received the copy;
+- identify which physical member received every copy;
 - run before own-transmission suppression;
 - avoid mutating `WlanSink`;
 - avoid adding beacons, clients, handshakes, or decloak evidence;
 - allow a strict filter so unrelated traffic is not retained;
-- preserve the normal scanner behavior when no observer is registered.
+- support an observer collection rather than a single hard-coded card;
+- preserve the normal scanner behavior when no observers are registered.
 
 This infrastructure is valuable enough to be reviewed as a separate first PR. It is also the main point where AirMirror touches shared receive architecture.
 
-### 5.3 Invalid trials
+### 5.4 Invalid trials
 
 A trial must be marked invalid, rather than as a target failure, when:
 
-- the observer does not capture the request;
+- the required observer policy does not capture the request;
 - the captured request fails normalized byte comparison;
-- the observer changes channel or disconnects;
+- an assigned required observer changes channel or disconnects;
 - the transmitter reports an injection error;
 - an unrelated response cannot be distinguished from the trial response;
 - cleanup or initial-state establishment fails.
 
-Invalid trials remain in the transcript for diagnosis but do not contribute to the control/mutation result.
+Invalid trials remain in the transcript for diagnosis but do not contribute to the control/mutation result. Optional observers may miss a frame without invalidating the trial, but their absence and role must still be recorded.
 
 ## 6. Response fingerprints
 
@@ -325,7 +381,7 @@ At minimum, each run should record:
 | Hardware | all participating chipsets, VID:PIDs, drivers, hardware profile, assignments, and role block |
 | Experiment | relation identifier and version, parameters, repetition policy |
 | Intent | canonical frame and transformed frame bytes |
-| OTA verification | observed bytes, receiving card, match result |
+| OTA verification | observed bytes, receiving card, match result, and evidence label for every observer |
 | Response | raw response and normalized fingerprint |
 | State | source MAC policy, trial order, cleanup result |
 | Outcome | valid, invalid, control result, mutation result, or inconclusive |
@@ -335,6 +391,18 @@ The human-readable summary should avoid claiming a vulnerability automatically. 
 > Stable differential behavior observed: control association received status X in 12/12 verified trials, while mutation received status Y in 11/12 verified trials. The result followed the transformation after control and mutation assignments were exchanged between transmitters. It also reproduced after observer rotation. Standards interpretation is still required.
 
 PCAP or PCAPNG export is desirable, but the internal transcript must not depend on a capture format to preserve experiment metadata.
+
+For multi-observer profiles, the transcript should retain an observation matrix rather than only a merged capture:
+
+```text
+                 Observer C   Observer D   Observer E
+Control request     seen         seen         missed
+Control response    seen         seen          seen
+Mutation request    seen         missed        seen
+Mutation response   seen         seen          seen
+```
+
+The matrix must include the normalized bytes, FCS status when available, RSSI, channel, and trial-matching decision behind every `seen` value. Packet loss is often correlated, so the number of observers is not itself a statistical confidence score.
 
 ## 9. Safety and authorization model
 
@@ -383,8 +451,9 @@ Names are provisional, but the responsibility split should remain narrow.
 
 ### Shared receive infrastructure
 
-- campaign-scoped pre-suppression observer subscription;
+- campaign-scoped pre-suppression observer subscriptions;
 - physical receiving-card identity;
+- per-observer copies before global deduplication;
 - no changes to normal sink semantics when unused.
 
 ### AirMirror experiment layer
@@ -395,6 +464,7 @@ Names are provisional, but the responsibility split should remain narrow.
 - station identity policy;
 - response matching and normalization;
 - crossover and stability evaluation;
+- evidence policy for required and optional observers;
 - transcript creation.
 
 ### UI layer
@@ -441,6 +511,9 @@ If this cannot be made reliable, the active proposal should stop rather than gro
 ### Later phases
 
 - additional metamorphic relations;
+- four-radio corroboration with two heterogeneous observers;
+- five-radio observer ensembles and full role-rotation confirmation;
+- cross-channel sentinels for known affiliated BSSIDs;
 - explicit PMF and RSN conformance packs;
 - credential-free patch-status tests where legally and ethically appropriate;
 - passive Air Identity Graph;
@@ -456,6 +529,7 @@ Required properties:
 
 - normal scanning and sink state are unchanged outside an active trial;
 - every counted trial has independent OTA request verification;
+- multi-observer profiles preserve per-card copies and evidence labels;
 - control/mutation ordering is randomized and recorded;
 - the result survives the crossover required by the selected two- or three-radio profile;
 - three-radio reports distinguish transmitter crossover from optional observer rotation;
@@ -495,6 +569,12 @@ Keeping these non-goals explicit is necessary for a reviewable contribution.
 
 **Risk:** packet loss and scheduling jitter create false differences.  
 **Mitigation:** discrete outcomes, repeated paired trials, randomized order, invalid-trial handling, and no timing oracle.
+
+### Multi-adapter resource contention
+
+**Risk:** four or five concurrent bulk-RX streams can overload a shared USB controller or hub, while closely placed transmitters can desensitize observers through RF coupling.
+
+**Mitigation:** record USB bus topology, power arrangement, adapter placement, per-card loss rates, and RSSI; qualify larger sets independently instead of assuming that more radios always improve evidence.
 
 ### Transmitter-specific behavior
 
@@ -540,19 +620,21 @@ The proposed distinction is the combination of:
 2. independent over-the-air verification of every counted request;
 3. repeated paired trials with randomized ordering;
 4. balanced transmitter crossover to expose TX bias, with optional observer rotation to expose RX bias;
-5. evidence output instead of an automatic vulnerability claim;
-6. implementation on directly controlled commodity USB Wi-Fi hardware.
+5. an extensible per-observer evidence matrix for larger radio sets;
+6. evidence output instead of an automatic vulnerability claim;
+7. implementation on directly controlled commodity USB Wi-Fi hardware.
 
 This document does not claim exhaustive prior-art coverage or guaranteed novelty. The combination is a research hypothesis that should first be validated as an engineering method.
 
 ## 17. Questions for the maintainer
 
-Before implementation, the proposal needs guidance on four points:
+Before implementation, the proposal needs guidance on five points:
 
 1. Does a lab-only differential state-auditing campaign fit wifit3's intended Layer 2 scope?
 2. Should the pre-suppression observer hook and transcript model be proposed as an independent infrastructure PR?
 3. Is a two-adapter minimum with a three-adapter recommended evidence profile acceptable for the first experiment?
 4. Where should the hard authorized-lab policy live so campaigns cannot accidentally bypass it?
+5. Should the observer API model a collection from the first PR even though four- and five-radio profiles remain future work?
 
 If the direction is in scope, the next step should be the Phase 0 bench feasibility check and a small observer-hook design, not a broad mutation catalog.
 
@@ -560,6 +642,6 @@ If the direction is in scope, the next step should be the Phase 0 bench feasibil
 
 AirMirror is intended to answer one defensible question at a time: did a target enter a different observable protocol state after a transformation that should not have changed the exchange's meaning?
 
-Wifit3 can make that question unusually credible because it can run a two-radio verified profile at minimum and a three-radio balanced profile for stronger evidence. In the preferred setup, two directly controlled USB adapters maintain separate station contexts while a third verifies both exchanges over the air; control and mutation assignments are then crossed between the transmitters. The project does not need to become a general fuzzer to test the idea.
+Wifit3 can make that question unusually credible because it can run a two-radio verified profile at minimum and a three-radio balanced profile for stronger evidence. In the preferred setup, two directly controlled USB adapters maintain separate station contexts while a third verifies both exchanges over the air; control and mutation assignments are then crossed between the transmitters. Four- and five-radio profiles can later add corroborating observers, full role rotation, or cross-channel sentinels without changing the core differential oracle. The project does not need to become a general fuzzer to test the idea.
 
 Starting with one relation, discrete outcomes, strict invalid-trial handling, and an explicit lab boundary keeps the proposal aligned with wifit3's auditing focus. If the method proves reliable, broader conformance packs, passive topology, MLO consistency checks, and automatic testcase reduction can be added later as separate, evidence-driven steps.
